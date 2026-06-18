@@ -40,3 +40,7 @@ push -u is only used on the first time you are pushing a branch. After that you 
 
 Lastly I will show you the pull request
 in this case there isn't any comparison but there are points where there is e.g
+
+This is where TK and I will do the merging
+
+I hope that helped. I am at work so there was a bit of jamming and some lapses, please be a bit more understanding for that😅 ma ad aSpotify momo😂😂😂
