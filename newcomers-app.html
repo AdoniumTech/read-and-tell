@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Newcomers App</title>
+
+  <!-- tailwind for styling - honestly saves me so much time -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- font awesome icons - i use these everywhere now -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+
+  <!-- react and reactdom - the main library im using to build this -->
+  <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <!-- babel lets me write JSX in the browser without a build step -->
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
+
+  <!-- xlsx library so i can export to excel -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <style>
+    /* google font - inter just looks really clean */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+    body { font-family: 'Inter', sans-serif; }
+
+    /* this little animation plays when the toast pops up */
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateX(-50%) translateY(-12px); }
+      to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+    .toast-anim { animation: slideDown 0.25s ease forwards; }
+
+    /* the card hover lift effect - learned this from a youtube tutorial */
+    .lift-card {
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .lift-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 12px 28px -6px rgba(0,0,0,0.1);
+    }
+
+    /* row hover in the table */
+    .table-row { transition: background 0.1s ease; }
+    .table-row:hover { background-color: #f8fafc; }
+
+    /* fade in for the table rows - makes it feel smooth when records appear */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .fade-row { animation: fadeIn 0.2s ease both; }
+  </style>
+</head>
+<body class="bg-slate-100 min-h-screen antialiased">
+
+  <!-- react mounts everything inside this div -->
+  <div id="root"></div>
+
+  <script type="text/babel">
+
+    // pulling out the hooks i need from react - useState stores data, useMemo is for calculations
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    // ─────────────────────────────────────────────────────────────
+    //  UTILITY FUNCTIONS
+    //  just small helpers i wrote so i dont repeat myself everywhere
+    // ─────────────────────────────────────────────────────────────
+
+    // returns todays date as a string like "2024-07-06" - date inputs need this format
+    function getToday() {
+      return new Date().toISOString().split('T')[0];
+    }
+
+    // turns "2024-07-06" into something readable like "Jul 6, 2024"
+    function niceDate(str) {
+      if (!str) return '';
+      const d = new Date(str);
+      return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+    }
+
+    // figures out if a date is in semester 1 (jan-jun) or semester 2 (jul-dec)
+    function semShort(str) {
+      const month = new Date(str).getMonth(); // getMonth() returns 0-11 which tripped me up at first
+      return month <= 5 ? 'S1' : 'S2';
+    }
+
+    // same thing but the full label for the excel export
+    function semFull(str) {
+      const month = new Date(str).getMonth();
+      return month <= 5 ? 'Semester 1 (Jan – Jun)' : 'Semester 2 (Jul – Dec)';
+    }
+
+    // makes a random-ish id so every record has a unique key
+    function makeId() {
+      return Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+    }
+
+    // simple escape so nobody can accidentally break the page with weird characters in their name
+    function safe(str) {
+      return String(str).replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+
+    // ─────────────────────────────────────────────────────────────
+    //  TOAST COMPONENT
+    //  the little popup message at the top - i kept it separate
+    //  because i use it in a bunch of places
+    // ─────────────────────────────────────────────────────────────
+    function Toast({ message }) {
+      // if there's no message just dont render anything at all
+      if (!message) return null;
+
+      return (
+        <div className="toast-anim fixed top-5 left-1/2 z-50 flex items-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-medium text-white shadow-2xl"
+             style={{ transform: 'translateX(-50%)' }}>
+          <i className="fas fa-circle-check text-emerald-400 text-base"></i>
+          {message}
+        </div>
+      );
+    }
+
+
+    // ─────────────────────────────────────────────────────────────
+    //  STAT CARD COMPONENT
+    //  the three summary boxes at the top - today / month / semester
+    //  i made it a component so i don't have to copy paste three times
+    // ─────────────────────────────────────────────────────────────
+    function StatCard({ icon, label, value, iconBg, iconColor }) {
+      return (
+        <div className="lift-card bg-white rounded-2xl border border-slate-200 p-5 flex items-center gap-4 shadow-sm">
+          {/* colored icon box on the left */}
+          <div className={`${iconBg} ${iconColor} rounded-xl p-3 text-xl flex-shrink-0`}>
+            <i className={`fas ${icon}`}></i>
+          </div>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">{label}</p>
+            {/* the big number */}
+            <p className="text-4xl font-extrabold text-slate-800 leading-none mt-1">{value}</p>
+          </div>
+        </div>
+      );
+    }
+
+
+    // ─────────────────────────────────────────────────────────────
+    //  FILTER BUTTON COMPONENT
+    //  the little pill buttons for all / today / month / semester
+    // ─────────────────────────────────────────────────────────────
+    function FilterBtn({ label, active, onClick }) {
+      return (
+        <button
+          onClick={onClick}
+          className={`px-4 py-1.5 rounded-xl text-sm font-semibold transition-all
+            ${active
+              ? 'bg-violet-600 text-white shadow-md shadow-violet-200'
+              : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50'
+            }`}
+        >
+          {label}
+        </button>
+      );
+    }
+
+
+    // ─────────────────────────────────────────────────────────────
+    //  MAIN APP COMPONENT
+    //  everything lives in here - this is the big one
+    // ─────────────────────────────────────────────────────────────
+    function App() {
+
+      // --- all my state variables ---
+      // records is the main list of newcomers
+      const [records,    setRecords]    = useState([]);
+      // what the user typed in the name field
+      const [name,       setName]       = useState('');
+      // the selected date - defaults to today
+      const [date,       setDate]       = useState(getToday());
+      // which filter button is active right now
+      const [filter,     setFilter]     = useState('all');
+      // what the user typed in the search box
+      const [search,     setSearch]     = useState('');
+      // the toast message - null means no toast showing
+      const [toast,      setToast]      = useState(null);
+
+      // i use this ref to track the auto-clear timer for the toast
+      // so i can cancel it if a new toast comes in before the old one fades
+      const toastTimer = useRef(null);
+
+      // helper that shows a toast and auto-hides it after 2.5 seconds
+      function showToast(msg) {
+        setToast(msg);
+        clearTimeout(toastTimer.current); // cancel any previous timer first
+        toastTimer.current = setTimeout(() => setToast(null), 2500);
+      }
+
+
+      // ── COMPUTED STATS ──────────────────────────────────────────
+      // useMemo means this only recalculates when records changes
+      // otherwise it would re-run on every single keystroke which is wasteful
+      const stats = useMemo(() => {
+        const today = getToday();
+        const now   = new Date();
+        const thisSem = semShort(today);
+
+        const todayCount = records.filter(r => r.date === today).length;
+
+        const monthCount = records.filter(r => {
+          const d = new Date(r.date);
+          // check same month AND same year so january 2023 doesn't count for january 2024
+          return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+        }).length;
+
+        const semCount = records.filter(r => {
+          const d = new Date(r.date);
+          return semShort(r.date) === thisSem && d.getFullYear() === now.getFullYear();
+        }).length;
+
+        return { today: todayCount, month: monthCount, semester: semCount };
+      }, [records]);
+
+
+      // ── FILTERED + SEARCHED LIST ────────────────────────────────
+      // this is what actually shows in the table - filtered then searched then sorted
+      const visible = useMemo(() => {
+        const today = getToday();
+        const now   = new Date();
+        const thisSem = semShort(today);
+
+        // start with all records then cut it down based on the active filter
+        let list = [...records];
+
+        if (filter === 'today') {
+          list = list.filter(r => r.date === today);
+        } else if (filter === 'month') {
+          list = list.filter(r => {
+            const d = new Date(r.date);
+            return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+          });
+        } else if (filter === 'semester') {
+          list = list.filter(r => {
+            const d = new Date(r.date);
+            return semShort(r.date) === thisSem && d.getFullYear() === now.getFullYear();
+          });
+        }
+
+        // now apply the search on top of the filter
+        if (search.trim()) {
+          const q = search.trim().toLowerCase();
+          list = list.filter(r => r.name.toLowerCase().includes(q));
+        }
+
+        // sort newest date first
+        list.sort((a, b) => new Date(b.date) - new Date(a.date));
+        return list;
+      }, [records, filter, search]);
+
+
+      // ── ADD A RECORD ────────────────────────────────────────────
+      function handleAdd(e) {
+        // prevent the form from refreshing the page - classic beginner mistake i kept making
+        e.preventDefault();
+
+        if (!name.trim()) { showToast('⚠️ Type a name first!'); return; }
+        if (!date)        { showToast('⚠️ Pick a date!');       return; }
+
+        // build the new record object
+        const newRecord = {
+          id:   makeId(),
+          name: name.trim(),
+          date: date,
+        };
+
+        // add it to the front of the list so it shows up at the top
+        setRecords(prev => [newRecord, ...prev]);
+
+        // clear the name field but keep the date - feels nicer for batch entry
+        setName('');
+        setDate(getToday());
+
+        showToast('✅ ' + newRecord.name + ' added!');
+      }
+
+
+      // ── DELETE ONE RECORD ───────────────────────────────────────
+      function handleDelete(id) {
+        if (!window.confirm('Delete this record?')) return;
+        // filter keeps everything EXCEPT the one we want to remove
+        setRecords(prev => prev.filter(r => r.id !== id));
+        showToast('🗑️ Record removed.');
+      }
+
+
+      // ── CLEAR EVERYTHING ────────────────────────────────────────
+      function handleClearAll() {
+        if (records.length === 0) { showToast('Nothing to clear!'); return; }
+        if (!window.confirm('Delete ALL records? This cannot be undone.')) return;
+        setRecords([]);
+        showToast('🗑️ All records cleared.');
+      }
+
+
+      // ── EXPORT TO EXCEL ─────────────────────────────────────────
+      function handleExport() {
+        if (records.length === 0) { showToast('No records to export yet.'); return; }
+        if (typeof XLSX === 'undefined') { showToast('❌ XLSX library not loaded.'); return; }
+
+        // build a plain array of objects for the spreadsheet
+        const rows = records.map((r, i) => ({
+          '#':       i + 1,
+          'Name':    r.name,
+          'Date':    niceDate(r.date),
+          'Semester': semFull(r.date),
+        }));
+
+        // xlsx stuff - create workbook, add a sheet, save the file
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(rows);
+        XLSX.utils.book_append_sheet(wb, ws, 'Newcomers');
+        XLSX.writeFile(wb, 'Newcomers_' + getToday() + '.xlsx');
+
+        showToast('📥 Excel file downloaded!');
+      }
+
+
+      // ── RENDER ──────────────────────────────────────────────────
+      // this is what actually shows on screen
+      return (
+        <div className="min-h-screen bg-slate-100">
+
+          {/* toast pops up at the top - only renders when toast state has a value */}
+          <Toast message={toast} />
+
+
+          {/* ── HEADER ── */}
+          <header className="bg-gradient-to-r from-violet-700 via-violet-600 to-indigo-600 text-white shadow-lg">
+            <div className="max-w-5xl mx-auto px-5 py-5 flex flex-wrap items-center justify-between gap-3">
+
+              {/* left side - icon + title */}
+              <div className="flex items-center gap-3">
+                <div className="bg-white/20 rounded-xl p-2.5 text-xl">
+                  <i className="fas fa-hands-praying"></i>
+                </div>
+                <div>
+                  <h1 className="text-2xl font-extrabold tracking-tight">Newcomers</h1>
+                  <p className="text-violet-200 text-xs mt-0.5">
+                    <i className="fas fa-calendar-day mr-1"></i>{getToday()}
+                  </p>
+                </div>
+              </div>
+
+              {/* right side - total count badge */}
+              <div className="bg-white/15 rounded-xl px-4 py-2 text-sm font-medium flex items-center gap-2">
+                <i className="fas fa-database text-violet-300"></i>
+                <span className="font-bold text-lg leading-none">{records.length}</span>
+                <span className="text-violet-200">total</span>
+              </div>
+            </div>
+          </header>
+
+
+          <main className="max-w-5xl mx-auto px-5 py-8 space-y-6">
+
+            {/* ── STAT CARDS ── */}
+            {/* i pass props into StatCard so i can reuse the same component */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <StatCard icon="fa-calendar-day"    label="Today"         value={stats.today}    iconBg="bg-violet-50"  iconColor="text-violet-600" />
+              <StatCard icon="fa-calendar-alt"    label="This Month"    value={stats.month}    iconBg="bg-emerald-50" iconColor="text-emerald-600" />
+              <StatCard icon="fa-graduation-cap"  label="This Semester" value={stats.semester} iconBg="bg-amber-50"   iconColor="text-amber-600" />
+            </div>
+
+
+            {/* ── ADD FORM ── */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+              <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-4">
+                <i className="fas fa-user-plus mr-1"></i> Add a Newcomer
+              </p>
+
+              {/* onSubmit on the form so enter key works too */}
+              <form onSubmit={handleAdd} className="flex flex-wrap gap-3 items-end">
+
+                {/* name input */}
+                <div className="flex-1 min-w-[180px]">
+                  <label className="block text-xs font-semibold text-slate-500 mb-1.5">Full Name</label>
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={e => setName(e.target.value)}
+                    placeholder="e.g. John Doe"
+                    className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent placeholder:text-slate-400"
+                  />
+                </div>
+
+                {/* date picker */}
+                <div className="w-44">
+                  <label className="block text-xs font-semibold text-slate-500 mb-1.5">Date</label>
+                  <input
+                    type="date"
+                    value={date}
+                    onChange={e => setDate(e.target.value)}
+                    className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent"
+                  />
+                </div>
+
+                {/* submit button */}
+                <button
+                  type="submit"
+                  className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-semibold text-sm shadow-sm shadow-violet-200 transition-all"
+                >
+                  <i className="fas fa-plus"></i> Add
+                </button>
+              </form>
+            </div>
+
+
+            {/* ── TOOLBAR : filters + search + action buttons ── */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+
+              {/* filter pills - clicking one re-runs the visible useMemo above */}
+              <div className="flex flex-wrap gap-2">
+                <FilterBtn label="All"           active={filter === 'all'}      onClick={() => setFilter('all')} />
+                <FilterBtn label="Today"         active={filter === 'today'}    onClick={() => setFilter('today')} />
+                <FilterBtn label="This Month"    active={filter === 'month'}    onClick={() => setFilter('month')} />
+                <FilterBtn label="This Semester" active={filter === 'semester'} onClick={() => setFilter('semester')} />
+              </div>
+
+              {/* right side actions */}
+              <div className="flex flex-wrap gap-2 items-center">
+
+                {/* search box - just updates state and useMemo does the filtering */}
+                <div className="relative">
+                  <i className="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                  <input
+                    type="text"
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    placeholder="Search..."
+                    className="pl-8 pr-4 py-1.5 text-sm rounded-xl border border-slate-200 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-400 w-40"
+                  />
+                </div>
+
+                {/* export button */}
+                <button
+                  onClick={handleExport}
+                  className="flex items-center gap-2 px-3 py-1.5 text-sm font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
+                >
+                  <i className="fas fa-file-excel"></i> Export
+                </button>
+
+                {/* clear all - red because its destructive */}
+                <button
+                  onClick={handleClearAll}
+                  className="flex items-center gap-2 px-3 py-1.5 text-sm font-semibold rounded-xl bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 transition-all"
+                >
+                  <i className="fas fa-trash-can"></i> Clear
+                </button>
+              </div>
+            </div>
+
+
+            {/* ── RECORDS TABLE ── */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+
+                  <thead className="bg-slate-50 border-b border-slate-200">
+                    <tr>
+                      <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-400 w-10">#</th>
+                      <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-400">Name</th>
+                      <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-400">Date</th>
+                      <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-400">Semester</th>
+                      <th className="px-5 py-3 text-right text-xs font-bold uppercase tracking-wider text-slate-400">Action</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {/* if nothing to show, display an empty state */}
+                    {visible.length === 0 ? (
+                      <tr>
+                        <td colSpan="5" className="px-5 py-14 text-center text-slate-400">
+                          <i className="fas fa-inbox text-4xl block mb-3 text-slate-300"></i>
+                          <span className="text-sm">No records yet — add one above!</span>
+                        </td>
+                      </tr>
+                    ) : (
+                      // map over visible records and render a row for each one
+                      visible.map((r, idx) => (
+                        <tr key={r.id} className="table-row fade-row border-b border-slate-100 last:border-0">
+
+                          {/* row number */}
+                          <td className="px-5 py-3.5 text-slate-400 font-mono text-xs">{idx + 1}</td>
+
+                          {/* name */}
+                          <td className="px-5 py-3.5 font-semibold text-slate-800">{r.name}</td>
+
+                          {/* formatted date */}
+                          <td className="px-5 py-3.5 text-slate-500">{niceDate(r.date)}</td>
+
+                          {/* semester badge */}
+                          <td className="px-5 py-3.5">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-violet-50 text-violet-700">
+                              <i className="fas fa-graduation-cap text-[10px]"></i>
+                              {semShort(r.date)}
+                            </span>
+                          </td>
+
+                          {/* delete button for this row */}
+                          <td className="px-5 py-3.5 text-right">
+                            <button
+                              onClick={() => handleDelete(r.id)}
+                              className="text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg p-1.5 transition-all"
+                              title="Delete record"
+                            >
+                              <i className="fas fa-trash-can"></i>
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* table footer - shows how many records are visible vs total */}
+              <div className="px-5 py-3 bg-slate-50 border-t border-slate-200 flex justify-between items-center text-xs text-slate-400">
+                <span>Showing <strong className="text-slate-600">{visible.length}</strong> of <strong className="text-slate-600">{records.length}</strong> records</span>
+                {/* only show the filter label when a filter is actually active */}
+                {filter !== 'all' && (
+                  <span className="flex items-center gap-1 text-violet-500 font-semibold">
+                    <i className="fas fa-filter text-[10px]"></i>
+                    {filter === 'today' ? 'Today' : filter === 'month' ? 'This Month' : 'This Semester'}
+                  </span>
+                )}
+              </div>
+            </div>
+
+
+            {/* ── FOOTER ── */}
+            <p className="text-center text-xs text-slate-400 pb-4">
+              <i className="fas fa-circle-info mr-1"></i>
+              Data lives in memory — it resets when you close or refresh the page.
+            </p>
+
+          </main>
+        </div>
+      );
+    }
+
+
+    // ─────────────────────────────────────────────────────────────
+    //  MOUNT
+    //  this is how react gets attached to the page
+    //  createRoot is the new react 18 way of doing it
+    // ─────────────────────────────────────────────────────────────
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+
+  </script>
+</body>
+</html>
